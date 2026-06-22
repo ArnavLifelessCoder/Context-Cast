@@ -1,0 +1,33 @@
+# Render Blueprint — deploy ContextCast as a single full-stack web service.
+# Render serves the API and the static frontend from the same process.
+#
+# To deploy: push to GitHub, then in Render click "New +" → "Blueprint" and
+# point it at this repo. Render reads this file and creates the service.
+#
+# NOTE on persistence:
+#   - The `disk` block below gives the SQLite DB a persistent home so data
+#     survives restarts/redeploys. Persistent disks require a PAID instance
+#     (Starter or higher).
+#   - On the FREE plan, remove the `disk:` block and the CONTEXTCAST_DB env var.
+#     The app still runs fine — it just stores the DB on ephemeral storage and
+#     re-seeds + re-ingests on each restart (you lose saved items across restarts).
+
+services:
+  - type: web
+    name: contextcast
+    runtime: python
+    plan: starter            # use `free` if you remove the disk block below
+    buildCommand: pip install -r requirements.txt
+    # Render injects $PORT (server.py reads it); we must bind 0.0.0.0 so Render
+    # can route external traffic to the container.
+    startCommand: python server.py --host 0.0.0.0
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+      - key: CONTEXTCAST_DB
+        value: /var/data/contextcast.db
+    disk:
+      name: contextcast-data
+      mountPath: /var/data
+      sizeGB: 1

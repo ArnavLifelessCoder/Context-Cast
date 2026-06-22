@@ -124,24 +124,41 @@ external hosted database — which defeats the zero-cost, zero-dependency design
 Instead, use a host that runs a **persistent process with a small disk**. The
 options below deploy straight from your Git repo, **no Docker needed**.
 
-### Recommended: Render or Railway (no Docker, gives you a URL)
+### Deploy on Render (recommended — one full-stack service)
 
-Both detect Python automatically and deploy from a connected GitHub repo:
+ContextCast is **one process that serves both the API and the frontend**, so you
+deploy a *single* Render Web Service — there is no separate frontend/backend to
+wire up. The repo ships a `requirements.txt` (empty — std-lib only, so Render
+detects Python) and a `render.yaml` Blueprint.
+
+**Option 1 — Blueprint (one click):**
 
 1. Push this repo to GitHub.
-2. Create a new **Web Service** and connect the repo.
-3. **Start command:** `python server.py` — it reads `$PORT` automatically, so no
-   host/port flags are needed.
-4. **Add a persistent disk** (Render: "Disks"; Railway: "Volumes"), mount it at
-   e.g. `/data`, and set an environment variable
-   `CONTEXTCAST_DB=/data/contextcast.db`. This is the important step — without a
-   persistent disk the SQLite file lives on ephemeral storage and resets on every
-   redeploy.
-5. Deploy. You get a public `https://...` URL; the DB is created and seeded on
-   first boot.
+2. In Render: **New +** → **Blueprint** → select the repo. Render reads
+   `render.yaml` and creates the service.
+3. Deploy. You get a public `https://contextcast.onrender.com`-style URL.
 
-No secrets or API keys are required. Fly.io works the same way (persistent volume
-+ `python server.py`); Replit / PythonAnywhere also run it as a plain script.
+**Option 2 — manual dashboard setup:**
+
+1. Push to GitHub. In Render: **New +** → **Web Service** → connect the repo.
+2. **Language:** Python. **Build command:** `pip install -r requirements.txt`.
+3. **Start command:** `python server.py --host 0.0.0.0`
+   — Render injects `$PORT` (the app reads it), but you **must** bind `0.0.0.0`
+   or Render can't route traffic to the container.
+4. **For persistence (paid Starter+):** add a **Disk** mounted at `/var/data`,
+   then set env var `CONTEXTCAST_DB=/var/data/contextcast.db`. The DB then
+   survives restarts and redeploys.
+5. Create the service. The DB is created and seeded on first boot.
+
+**Free plan caveat:** Render's free tier has **no persistent disk**, so omit the
+disk + `CONTEXTCAST_DB` (the app falls back to an ephemeral `contextcast.db` and
+re-seeds + re-ingests on each restart — fully functional, but saved items don't
+survive restarts). Free services also **sleep after inactivity**, which pauses the
+5-minute background ingest until the next request wakes them. For an always-on DB
+and continuous ingest, use a paid instance with a disk.
+
+No secrets or API keys are required. Railway works the same way (use a Volume
+instead of a Disk); Fly.io too (persistent volume + `python server.py`).
 
 ### The database
 

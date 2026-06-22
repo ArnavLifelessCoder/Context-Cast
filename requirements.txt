@@ -1,0 +1,4 @@
+# ContextCast has no third-party dependencies — it runs on the Python standard
+# library only. This file is intentionally empty (aside from comments) so that
+# Render and other PaaS platforms reliably detect a Python project and provision
+# a Python runtime. Do not add packages unless you introduce a real dependency.

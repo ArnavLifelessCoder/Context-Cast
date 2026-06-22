@@ -22,6 +22,10 @@ class ManagedConnection(sqlite3.Connection):
 class Store:
     def __init__(self, path: str | Path = "contextcast.db") -> None:
         self.path = Path(path)
+        # Ensure the parent directory exists (e.g. a mounted disk path like
+        # /var/data) so SQLite can create the file on first boot.
+        if self.path.parent and not self.path.parent.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self.init_db()
 
     def connect(self) -> sqlite3.Connection:
