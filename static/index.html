@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ContextCast</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="rail">
+        <div class="brand">
+          <span class="brand-mark">CC</span>
+          <div>
+            <h1>ContextCast</h1>
+            <p id="lastUpdated">Local-first intelligence</p>
+          </div>
+        </div>
+
+        <nav class="tabs" aria-label="Views">
+          <button class="tab active" data-view="feed">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+            Feed
+          </button>
+          <button class="tab" data-view="pulse">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Pulse
+          </button>
+          <button class="tab" data-view="saved">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+            Saved
+          </button>
+          <button class="tab" data-view="graph">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="6" cy="19" r="2"/><path d="M10.5 10.5 6.5 7.5M13.5 10.5l4-4M11 13.5l-4 4"/></svg>
+            Graph
+          </button>
+          <button class="tab" data-view="admin">
+            <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/><circle cx="12" cy="12" r="3"/></svg>
+            Ops
+          </button>
+        </nav>
+
+        <section class="control-panel">
+          <div class="field-row">
+            <label for="city">City</label>
+            <select id="city"></select>
+          </div>
+          <div class="field-row">
+            <label for="radius">Radius <span id="radiusLabel">25 km</span></label>
+            <input id="radius" type="range" min="5" max="80" value="25">
+          </div>
+          <div class="field-row">
+            <label for="domain">Domain</label>
+            <select id="domain">
+              <option value="builder">Builder / engineer</option>
+              <option value="founder">Founder / startup</option>
+              <option value="student">Student / learning</option>
+              <option value="creator">Creator / culture</option>
+              <option value="operator">Operator / business</option>
+              <option value="explorer">Explorer / everything</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="goal">What are you hunting for?</label>
+            <input id="goal" class="text-input" maxlength="180" placeholder="Hackathons, tech meetups, city news...">
+          </div>
+          <div>
+            <div class="panel-heading">
+              <span>Signal types</span>
+            </div>
+            <div id="signalTypes" class="topic-grid compact"></div>
+          </div>
+          <div>
+            <div class="panel-heading">
+              <span>Genres</span>
+              <button id="clearTopics" class="ghost">Clear</button>
+            </div>
+            <div id="topics" class="topic-grid"></div>
+          </div>
+          <button id="saveProfile" class="primary">Apply Profile</button>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="command">
+          <div>
+            <p class="eyebrow">Zero-cost mode</p>
+            <h2 id="viewTitle">Recommended signals</h2>
+          </div>
+          <div class="command-actions">
+            <button id="refreshLive" class="secondary">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              Pull Live
+            </button>
+            <span id="autoStatus" class="auto-status">Auto 5m</span>
+            <span id="costBadge" class="cost">$0 cost</span>
+            <button id="darkToggle" class="icon-btn" title="Toggle dark mode" aria-label="Toggle dark mode"></button>
+          </div>
+        </header>
+
+        <section class="quick-stats" id="quickStats"></section>
+
+        <section id="feedView" class="view active">
+          <div class="toolbar">
+            <div class="search-wrap">
+              <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input id="search" class="text-input" placeholder="Search signals, sources, cities...">
+            </div>
+            <div id="kindSegment" class="segmented" role="tablist" aria-label="Signal type">
+              <button class="seg active" data-kind="all">All <span class="count" data-count="all">0</span></button>
+              <button class="seg" data-kind="event">Events <span class="count" data-count="event">0</span></button>
+              <button class="seg" data-kind="news">News <span class="count" data-count="news">0</span></button>
+              <button class="seg" data-kind="discussion">Talk <span class="count" data-count="discussion">0</span></button>
+              <button class="seg" data-kind="signal">Signals <span class="count" data-count="signal">0</span></button>
+            </div>
+            <select id="sortMode" aria-label="Sort order">
+              <option value="relevance">Sort: Relevance</option>
+              <option value="newest">Sort: Newest</option>
+              <option value="nearest">Sort: Nearest</option>
+            </select>
+          </div>
+          <div id="dailyDigest" class="daily-digest hidden"></div>
+          <div id="sourceStrip" class="source-strip"></div>
+          <div id="feed" class="feed"></div>
+        </section>
+
+        <section id="pulseView" class="view">
+          <div id="briefing" class="briefing"></div>
+          <div id="opportunities" class="opportunities"></div>
+          <div class="pulse-grid">
+            <section class="pulse-panel">
+              <h3>Trend radar</h3>
+              <div id="trends"></div>
+            </section>
+            <section class="pulse-panel">
+              <h3>Semantic clusters</h3>
+              <div id="clusters"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="savedView" class="view">
+          <div class="saved-header">
+            <div>
+              <p class="eyebrow">Decision trail</p>
+              <h3>Saved intelligence</h3>
+            </div>
+            <button id="exportReport" class="secondary">Export Report</button>
+          </div>
+          <pre id="report" class="report hidden"></pre>
+          <div id="savedFeed" class="feed"></div>
+        </section>
+
+        <section id="graphView" class="view">
+          <canvas id="graph" width="1100" height="620"></canvas>
+        </section>
+
+        <section id="adminView" class="view">
+          <div id="modelCard" class="model-card"></div>
+          <div id="diagnostics" class="diagnostics"></div>
+          <div id="adminGrid" class="admin-grid"></div>
+        </section>
+      </section>
+    </main>
+    <section id="onboarding" class="onboarding hidden" aria-label="Context setup">
+      <div class="onboarding-card">
+        <p class="eyebrow">Quick context</p>
+        <h2>Tell ContextCast what to watch.</h2>
+        <div class="onboarding-grid">
+          <label>
+            Where are you from?
+            <select id="introCity"></select>
+          </label>
+          <label>
+            Your main domain
+            <select id="introDomain">
+              <option value="builder">Builder / engineer</option>
+              <option value="founder">Founder / startup</option>
+              <option value="student">Student / learning</option>
+              <option value="creator">Creator / culture</option>
+              <option value="operator">Operator / business</option>
+              <option value="explorer">Explorer / everything</option>
+            </select>
+          </label>
+          <label class="wide">
+            What should it surface?
+            <input id="introGoal" class="text-input" maxlength="180" value="Hackathons, tech meetups, city news, and startup signals">
+          </label>
+        </div>
+        <div>
+          <div class="panel-heading"><span>Pick genres</span></div>
+          <div id="introTopics" class="topic-grid"></div>
+        </div>
+        <div>
+          <div class="panel-heading"><span>Signal types</span></div>
+          <div id="introSignalTypes" class="topic-grid compact"></div>
+        </div>
+        <div class="onboarding-actions">
+          <button id="skipOnboarding" class="ghost">Skip</button>
+          <button id="finishOnboarding" class="primary">Start Watching</button>
+        </div>
+      </div>
+    </section>
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+    <div id="cardModal" class="card-modal hidden" role="dialog" aria-label="Signal details">
+      <div class="card-modal-backdrop"></div>
+      <div class="card-modal-content">
+        <button class="card-modal-close" aria-label="Close">&times;</button>
+        <div id="cardModalBody"></div>
+      </div>
+    </div>
+    <div class="keyboard-hints hidden" id="keyboardHints">
+      <span><kbd>j</kbd>/<kbd>k</kbd> navigate</span>
+      <span><kbd>s</kbd> save</span>
+      <span><kbd>m</kbd> mute</span>
+      <span><kbd>/</kbd> search</span>
+      <span><kbd>?</kbd> help</span>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
