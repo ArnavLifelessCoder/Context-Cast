@@ -2,6 +2,8 @@
 
 Zero-cost local MVP for a hyperlocal event and news intelligence platform.
 
+Link - https://context-cast.onrender.com
+
 The original project plan describes a production-grade stack with Kafka, Redis,
 PostgreSQL + pgvector, hosted observability, paid LLM explainability, and
 optional GPU fine-tuning. This implementation keeps the product idea intact
