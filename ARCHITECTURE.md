@@ -142,18 +142,25 @@ Everything lives in one process started by `server.py`:
   `INGEST_STATE`.
 - **`start_auto_ingest()`** spawns a daemon thread running `auto_ingest_loop()`:
   it sleeps ~3s, then every `AUTO_REFRESH_SECONDS` (300s) calls
-  `run_live_ingest()`.
+  `run_live_ingest()`. Each cycle is wrapped in `try/except` so one bad pass
+  (network blip, DB hiccup) can't kill the loop.
 - **`run_live_ingest()`** is guarded by a non-blocking `INGEST_LOCK`. If a pull
   is already running (auto *or* manual), a second call returns immediately with
   `reason: "already-running"` instead of piling up. It records timing/status in
   the module-level `INGEST_STATE` dict (`last_run`, `next_run`, `running`,
-  `last_result`), which the UI surfaces in the Ops tab and the auto-refresh
-  countdown.
+  `last_result` — including `duration_ms`), which the UI surfaces in the Ops
+  tab and the auto-refresh countdown. After upserting it calls
+  `Store.prune_events()` to drop stale, never-interacted live items.
+- **`start_background_ingest()`** wraps `run_live_ingest()` in a one-shot daemon
+  thread. This is what the manual `POST /api/ingest/live` uses, so the HTTP
+  request returns instantly and the browser polls for completion instead of
+  hanging for the duration of the pull.
 - **Concurrency & SQLite:** each DB operation opens its own connection
-  (`Store.connect()` → `ManagedConnection`, which auto-closes on context exit).
-  SQLite serializes writes; reads are independent. Because connections are
-  per-operation and short, the threaded server and the ingest thread coexist
-  safely without an ORM or connection pool.
+  (`Store.connect()` → `ManagedConnection`, which auto-closes on context exit)
+  with **WAL journal mode** and a 10s busy timeout, so feed reads proceed while
+  the ingest thread writes. Because connections are per-operation and short,
+  the threaded server and the ingest threads coexist safely without an ORM or
+  connection pool.
 
 ---
 
@@ -203,14 +210,20 @@ An `Event` wrapped with its score breakdown (`semantic_score`,
 Implemented in `contextcast/ingest.py`. One pass = `ingest_free_feeds()`:
 
 ```
-free_sources()  →  for each FeedSource:
+free_sources()  →  ThreadPoolExecutor(max_workers=16):
+  for each FeedSource (concurrently):
     fetch_with_fallback(url)        # HTTP GET, throttled, with reddit fallback
-      → fetch_text(url)             #   throttle_host() + urllib request
+      → fetch_text(url)             #   throttle_host() + urllib request (6s timeout)
     parse_feed(source, text, limit) # RSS <item> or Atom <entry>
       → rss_item_to_event / atom_entry_to_event
         → build_event(...)          # classify topic + kind, summarize, fingerprint
   → {"events": [...], "statuses": [...]}   # statuses power the source strip
 ```
+
+All ~75 sources are fetched **in parallel** through a bounded thread pool, so a
+full pass takes roughly as long as the slowest single feed (typically 15–25s)
+instead of the sum of all of them (minutes). Statuses keep the original source
+order and include per-feed timing (`ms`), shown as tooltips in the source strip.
 
 ### Sources (`free_sources`, ~75 feeds)
 Built programmatically:
@@ -229,8 +242,9 @@ Each source carries a *prior* `kind` that `detect_kind` can override per item.
 - `fetch_text()` sends a descriptive `User-Agent` + `Accept` header and decodes
   defensively (`errors="replace"`).
 - `throttle_host()` enforces a per-host minimum interval (`HOST_MIN_INTERVAL`,
-  e.g. `reddit.com → 1.5s`) using a lock + last-hit timestamp map, so a refresh
-  doesn't burst-hit a rate-limited host.
+  e.g. `reddit.com → 1.5s`). Each thread *reserves* its slot under a lock but
+  sleeps outside it, so a throttled host (Reddit) never stalls the concurrent
+  fetches of every other host.
 - `fetch_with_fallback()` retries on `old.reddit.com` when `www.reddit.com`
   returns **HTTP 429**.
 - Failures are **isolated**: a feed that errors is recorded in `statuses`
@@ -388,7 +402,14 @@ events       (id PK, source, title, description, city, venue, lat, lon, topic,
               image_url, source_domain)
 profiles     (user_id PK, city, radius_km, interests_json, context_json, updated_at)
 interactions (id PK, user_id, event_id, action, created_at)
+
+-- indexes: events(event_date DESC), interactions(user_id, created_at DESC),
+--          interactions(event_id)
 ```
+
+Connections run in **WAL mode** with `synchronous=NORMAL` and a 10s busy
+timeout, so the reader threads (feed API) and writer threads (ingest) don't
+block each other.
 
 Key behaviors:
 - **`init_db()`** creates tables, runs `_migrate()` (additive `ALTER TABLE`s that
@@ -401,8 +422,12 @@ Key behaviors:
   `update_interests()` in one transaction.
 - **`saved_events()`** returns items with a `save`/`attend` interaction;
   **`remove_interaction()`** deletes those.
-- **`admin_stats()`** aggregates counts by source/topic/city for the Ops tab;
-  **`portfolio_report()`** renders a Markdown summary for the Export feature.
+- **`admin_stats()`** aggregates counts by source/topic/city (plus a distinct
+  `source_count`) for the Ops tab; **`portfolio_report()`** renders a Markdown
+  summary for the Export feature.
+- **`prune_events(max_age_days=21)`** — run after every ingest — deletes
+  `live-*` events older than the cutoff that have **no interactions**, so the
+  DB stops growing unboundedly while saved items and interest history survive.
 - **`row_to_event()`** rebuilds an `Event` (recomputing a summary/domain if a row
   predates those columns).
 - **`sanitize_context()`** validates the profile `context` (whitelists
@@ -420,6 +445,18 @@ JSON handlers; everything else is served from `static/` (with a path-traversal
 guard that resolves the target and checks it stays inside `STATIC`). Datetimes
 and dataclasses serialize via `ApiEncoder`.
 
+Transport-level behavior:
+
+- **Gzip** — JSON responses over 1 KB and text-like static files are compressed
+  when the client sends `Accept-Encoding: gzip` (the 30-item feed payload drops
+  from ~42 KB to ~13 KB).
+- **Static caching** — files are cached in memory (with pre-compressed gzip
+  copies), invalidated by mtime, and served with `Cache-Control: public,
+  max-age=60`; API responses are `no-store`.
+- **Defensive parsing** — numeric query/body params go through `safe_int()`
+  (default + clamping), so a malformed `limit` or `radius_km` can't 500 a
+  request.
+
 ### GET
 
 | Endpoint | Returns |
@@ -433,6 +470,7 @@ and dataclasses serialize via `ApiEncoder`.
 | `/api/report` | Markdown portfolio report |
 | `/api/meta` | Topic list + city list (drives the controls) |
 | `/api/article/<id>` | Single-item detail |
+| `/api/health` | Liveness + `ingest_running` flag (used as the Render health check and by the UI's pull polling) |
 
 ### POST (JSON body)
 
@@ -441,7 +479,7 @@ and dataclasses serialize via `ApiEncoder`.
 | `/api/interact` | Record `click`/`save`/`attend`/`not_interested`; update interests |
 | `/api/interact/remove` | Un-save an item |
 | `/api/onboarding` | Upsert the profile (city, radius, interests, context) |
-| `/api/ingest/live` | Trigger an immediate live pull (the `Pull Live` button) |
+| `/api/ingest/live` | Start a live pull **in the background** and return immediately (the `Pull Live` button); pass `"wait": true` for the legacy synchronous behavior |
 
 Errors return JSON `{"error": …}` with an appropriate HTTP status; bad JSON →
 `400`.
@@ -463,8 +501,13 @@ A dependency-free SPA in three files — no framework, no build step.
     colored accent bar and a `kindLabel()` badge.
   - Client-side **search, sort, and filter** (`filteredFeed`), search-term
     highlighting, and a redundant-chip suppressor (`topicChip`).
-  - **Optimistic interactions** → POST → `load()` refresh; **toasts** for
+  - **Interactions** (save/track/mute) → POST → `refreshQuiet()`, a light
+    refresh that updates only the saved list and stats — the feed is *not*
+    re-ranked mid-read, so scroll position is preserved; **toasts** for
     feedback.
+  - **Pull Live** starts the background ingest, then polls
+    `/api/admin/pipeline` with a button spinner and a "Refreshing…" status chip
+    until `ingest.running` clears, then toasts the result with its duration.
   - **Keyboard navigation** (`j/k` move, `Enter` open, `s` save, `m` mute, `/`
     focus search, `?` hints).
   - **Dark mode** (token swap via `body.dark`, persisted in `localStorage`),
@@ -487,10 +530,15 @@ presentation, filtering, and sorting.
 ```
 auto_ingest_loop (every 300s)
   → run_live_ingest()            # acquires INGEST_LOCK (skips if busy)
-    → ingest_free_feeds()        # fetch + parse + classify + summarize ~75 feeds
+    → ingest_free_feeds()        # fetch ~75 feeds concurrently; parse/classify/summarize
     → STORE.upsert_events()      # insert/update by fingerprint id
-  → updates INGEST_STATE (last_run/next_run/last_result)
+    → STORE.prune_events()       # drop stale, never-interacted live items
+  → updates INGEST_STATE (last_run/next_run/last_result incl. duration_ms)
 ```
+
+The manual path is identical except it enters through
+`POST /api/ingest/live → start_background_ingest()` (returns immediately) and
+the browser polls `/api/admin/pipeline` until `running` clears.
 
 ### B. Loading the feed (read path)
 ```
@@ -507,7 +555,9 @@ app.js load() → renderFeed() / digest / counts / source strip
 ```
 click "Save" → POST /api/interact {event_id, action:"save"}
   → STORE.add_interaction()      # insert interaction + update_interests() (EMA)
-  → app.js load()                # next feed reflects the boosted topic
+  → app.js refreshQuiet()        # saved list + stats update; feed order (and
+                                 # scroll position) stay put — the boosted topic
+                                 # shows up on the next full load / auto-refresh
 ```
 
 ---
@@ -521,6 +571,9 @@ click "Save" → POST /api/interact {event_id, action:"save"}
 | `PORT` (env) / `--port` | `8000` | Listen port (PaaS platforms inject `$PORT`) |
 | `AUTO_REFRESH_SECONDS` | `300` | Background ingest interval (in `server.py`) |
 | `HOST_MIN_INTERVAL` | `reddit.com: 1.5s` | Per-host fetch throttle (in `ingest.py`) |
+| `max_workers` | `16` | Concurrent feed fetches per ingest pass (`ingest_free_feeds`) |
+| `fetch_text` timeout | `6s` | Per-feed HTTP timeout (in `ingest.py`) |
+| `prune_events` max age | `21` days | Retention for un-interacted live events (in `store.py`) |
 
 ---
 

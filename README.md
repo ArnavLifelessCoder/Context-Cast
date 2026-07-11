@@ -30,6 +30,12 @@ free RSS feeds only.
   Hacker News, Ars Technica), Indian startup media (YourStory, Inc42, The Ken),
   Reddit city subreddits, and event feeds (Insider.in, Meetup, Dev.to)
 - Automatic background refresh every 5 minutes while the server is running
+- **Concurrent ingest**: all sources are fetched in parallel, so a full pull
+  takes ~15–25 seconds instead of minutes; manual pulls run in the background
+  without blocking the UI
+- Gzip-compressed API/static responses and in-memory static caching
+- Automatic pruning of stale live items (saved items are always kept)
+- `/api/health` endpoint wired up as the Render health check
 - Per-host request throttling so rate-limited hosts (e.g. Reddit) get a fair shot
 - Local extractive summaries for noisy posts and articles
 - Pulse tab with city briefing, trend radar, and semantic clusters
