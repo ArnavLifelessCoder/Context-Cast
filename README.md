@@ -70,7 +70,14 @@ python -m unittest discover -s tests
 
 ## Live Ingest
 
-Click `Pull Live Sources` in the UI, or call:
+All sources are fetched **concurrently** (a full ~75-source pull completes in
+roughly the time of the slowest single feed, typically 15–25 seconds, instead
+of minutes sequentially). The `POST /api/ingest/live` endpoint starts the pull
+in the background and returns immediately; poll `/api/admin/pipeline` (or
+`/api/health`) to see when it finishes. Pass `"wait": true` for the old
+synchronous behavior.
+
+Click `Pull Live` in the UI, or call:
 
 ```powershell
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/ingest/live -Body '{"limit_per_source":4}' -ContentType 'application/json'

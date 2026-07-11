@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 contextcast.db
+contextcast.db-wal
+contextcast.db-shm
+.claude/launch.json

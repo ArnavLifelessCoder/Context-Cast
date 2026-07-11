@@ -22,6 +22,7 @@ services:
     # can route external traffic to the container.
     startCommand: python server.py --host 0.0.0.0
     autoDeploy: true
+    healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.4"

@@ -176,7 +176,7 @@ function openCardModal(item) {
         button.dataset.action === "not_interested" ? "mute" : "success"
       );
       closeCardModal();
-      await load();
+      await refreshQuiet();
     });
   });
 }
@@ -283,7 +283,7 @@ function renderQuickStats() {
   const nextRun = stats.ingest?.next_run ? timeUntil(stats.ingest.next_run) : "soon";
   $("#quickStats").innerHTML = [
     ["Indexed", stats.events_indexed || 0, "signals"],
-    ["Sources", Object.keys(stats.sources || {}).length, "active"],
+    ["Sources", stats.source_count || Object.keys(stats.sources || {}).length, "active"],
     ["Top genre", topTopic ? topTopic[0] : "none", topTopic ? `${topTopic[1]} items` : ""],
     ["Auto refresh", nextRun, "every 5 min"],
   ]
@@ -316,7 +316,10 @@ function renderSourceStrip() {
     .map((status) => {
       const className = status.ok ? "ok" : "bad";
       const label = status.ok ? `${status.count} pulled` : "blocked";
-      return `<span class="source-pill ${className}" title="${escapeHtml(status.error || "")}">${escapeHtml(status.source)}: ${escapeHtml(label)}</span>`;
+      const tip = status.ok
+        ? (status.ms ? `${status.ms} ms` : "")
+        : status.error || "";
+      return `<span class="source-pill ${className}" title="${escapeHtml(tip)}">${escapeHtml(status.source)}: ${escapeHtml(label)}</span>`;
     })
     .join("");
 }
@@ -439,7 +442,7 @@ function bindCardActions(root) {
         "Interest tracked",
         action === "not_interested" ? "mute" : "success"
       );
-      await load();
+      await refreshQuiet();
     });
   });
 }
@@ -678,7 +681,7 @@ function renderSaved() {
         body: JSON.stringify({ user_id: "demo", event_id: button.dataset.removeId }),
       });
       showToast("Removed from saved", "mute");
-      await load();
+      await refreshQuiet();
     });
   });
 }
@@ -775,25 +778,59 @@ async function saveContextProfile({ city, radius_km, selected, signalTypes, doma
   await load();
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function pullLiveSources() {
   const button = $("#refreshLive");
+  const originalHtml = button.innerHTML;
   button.disabled = true;
-  button.textContent = "Pulling...";
+  button.innerHTML = '<span class="spinner"></span> Pulling…';
   try {
-    const result = await api("/api/ingest/live", {
+    // The server starts the ingest in the background and returns immediately;
+    // poll the pipeline endpoint until it finishes so the UI never hangs.
+    await api("/api/ingest/live", {
       method: "POST",
       body: JSON.stringify({ limit_per_source: 4 }),
     });
-    state.sourceStatuses = result.statuses || [];
-    const okCount = (result.statuses || []).filter((s) => s.ok).length;
-    showToast(`Pulled ${result.fetched || 0} signals from ${okCount} sources`, "success");
+    let result = null;
+    for (let i = 0; i < 45; i++) {
+      await sleep(1500);
+      const stats = await api("/api/admin/pipeline");
+      state.stats = stats;
+      if (!stats.ingest?.running && stats.ingest?.last_result) {
+        result = stats.ingest.last_result;
+        break;
+      }
+    }
+    if (result && result.ok !== false) {
+      state.sourceStatuses = result.statuses || [];
+      const okCount = (result.statuses || []).filter((s) => s.ok).length;
+      const secs = result.duration_ms ? ` in ${(result.duration_ms / 1000).toFixed(1)}s` : "";
+      showToast(`Pulled ${result.fetched || 0} signals from ${okCount} sources${secs}`, "success");
+    } else {
+      showToast(result?.error ? `Pull failed: ${result.error}` : "Pull is taking longer than usual — the feed will update automatically.", "mute");
+    }
     await load({ keepStatuses: true });
   } catch (err) {
     showToast("Pull failed: " + err.message, "mute");
   } finally {
     button.disabled = false;
-    button.textContent = "Pull Live Sources";
+    button.innerHTML = originalHtml;
   }
+}
+
+// After an interaction we only need the saved list + stats to update.
+// A full load() re-ranks the feed and yanks the user's scroll position.
+async function refreshQuiet() {
+  try {
+    const [saved, stats] = await Promise.all([api("/api/saved"), api("/api/admin/pipeline")]);
+    state.saved = saved.events || [];
+    state.stats = stats;
+    renderSaved();
+    renderQuickStats();
+  } catch { /* next auto-refresh will catch up */ }
 }
 
 async function load(options = {}) {
@@ -885,7 +922,7 @@ function handleKeyboard(e) {
           body: JSON.stringify({ user_id: "demo", event_id: event.id, action: "save" }),
         }).then(() => {
           showToast("Saved to your trail", "success");
-          load();
+          refreshQuiet();
         });
       }
       break;
@@ -898,7 +935,7 @@ function handleKeyboard(e) {
           body: JSON.stringify({ user_id: "demo", event_id: event.id, action: "not_interested" }),
         }).then(() => {
           showToast("Muted this topic", "mute");
-          load();
+          refreshQuiet();
         });
       }
       break;
@@ -996,6 +1033,13 @@ async function exportReport() {
   const report = $("#report");
   report.textContent = result.markdown;
   report.classList.remove("hidden");
+  // Also offer the report as a downloadable markdown file.
+  const blob = new Blob([result.markdown], { type: "text/markdown" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "contextcast-report.md";
+  link.click();
+  URL.revokeObjectURL(link.href);
   try {
     await navigator.clipboard.writeText(result.markdown);
     $("#exportReport").textContent = "Copied Report";
@@ -1039,6 +1083,10 @@ function startAutoRefresh() {
 }
 
 function updateAutoStatus() {
+  if (state.stats?.ingest?.running) {
+    $("#autoStatus").textContent = "Refreshing…";
+    return;
+  }
   const nextRun = state.stats?.ingest?.next_run;
   $("#autoStatus").textContent = nextRun ? `Auto ${timeUntil(nextRun)}` : "Auto 5m";
 }

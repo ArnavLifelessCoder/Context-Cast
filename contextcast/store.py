@@ -29,8 +29,13 @@ class Store:
         self.init_db()
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, factory=ManagedConnection)
+        conn = sqlite3.connect(self.path, factory=ManagedConnection, timeout=10)
         conn.row_factory = sqlite3.Row
+        # WAL lets the feed API read while the background ingest writes,
+        # instead of one blocking the other.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=10000")
         return conn
 
     def init_db(self) -> None:
@@ -71,6 +76,10 @@ class Store:
                     action TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_events_date ON events(event_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_interactions_user ON interactions(user_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_interactions_event ON interactions(event_id);
                 """
             )
             self._migrate(conn)
@@ -355,13 +364,36 @@ class Store:
             "published_at": event.published_at,
         }
 
-    def remove_interaction(self,user_id: str, event_id: str) -> int:
+    def remove_interaction(self, user_id: str, event_id: str) -> int:
         with self.connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM interactions WHERE user_id = ? AND event_id = ? AND action IN ('save', 'attend')",
                 (user_id, event_id),
             )
-        return cursor.rowcount
+            removed = cursor.rowcount
+        return removed
+
+    def prune_events(self, max_age_days: int = 21) -> int:
+        """Delete stale live-ingested events nobody interacted with.
+
+        Keeps seed data and anything referenced by an interaction, so saved
+        items and the interest history stay intact while the DB stops growing
+        without bound.
+        """
+        cutoff = datetime.now(timezone.utc).timestamp() - max_age_days * 86400
+        cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM events
+                WHERE id LIKE 'live-%'
+                  AND event_date < ?
+                  AND id NOT IN (SELECT DISTINCT event_id FROM interactions)
+                """,
+                (cutoff_iso,),
+            )
+            pruned = cursor.rowcount
+        return pruned
 
     def admin_stats(self) -> dict[str, object]:
         with self.connect() as conn:
@@ -377,7 +409,9 @@ class Store:
                 "SELECT city, COUNT(*) AS count FROM events GROUP BY city ORDER BY count DESC"
             ).fetchall()
             last_fetch = conn.execute("SELECT MAX(fetched_at) FROM events").fetchone()[0]
+            source_count = conn.execute("SELECT COUNT(DISTINCT source) FROM events").fetchone()[0]
         return {
+            "source_count": source_count,
             "pipeline": "local-plus-live",
             "cost_usd": 0,
             "events_indexed": events,

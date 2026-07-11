@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -189,17 +190,52 @@ def free_sources() -> list[FeedSource]:
     return sources
 
 
-def ingest_free_feeds(limit_per_source: int = 6) -> dict[str, object]:
+def _ingest_one(source: FeedSource, limit_per_source: int) -> dict[str, object]:
+    started = time.monotonic()
+    try:
+        text = fetch_with_fallback(source.url)
+        parsed = parse_feed(source, text, limit_per_source)
+        return {
+            "source": source.name,
+            "ok": True,
+            "count": len(parsed),
+            "error": "",
+            "ms": int((time.monotonic() - started) * 1000),
+            "events": parsed,
+        }
+    except Exception as exc:
+        return {
+            "source": source.name,
+            "ok": False,
+            "count": 0,
+            "error": str(exc)[:140],
+            "ms": int((time.monotonic() - started) * 1000),
+            "events": [],
+        }
+
+
+def ingest_free_feeds(
+    limit_per_source: int = 6, max_workers: int = 16
+) -> dict[str, object]:
+    """Fetch every source concurrently.
+
+    Sequential fetching of ~75 feeds with an 8s timeout each took minutes on
+    slow networks (the Render symptom). A thread pool bounds the whole run to
+    roughly the slowest single feed; per-host throttling still serializes
+    rate-limited hosts like Reddit.
+    """
+    sources = free_sources()
     events: list[dict[str, object]] = []
     statuses: list[dict[str, object]] = []
-    for source in free_sources():
-        try:
-            text = fetch_with_fallback(source.url)
-            parsed = parse_feed(source, text, limit_per_source)
-            events.extend(parsed)
-            statuses.append({"source": source.name, "ok": True, "count": len(parsed), "error": ""})
-        except Exception as exc:
-            statuses.append({"source": source.name, "ok": False, "count": 0, "error": str(exc)[:140]})
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="ingest") as pool:
+        futures = [pool.submit(_ingest_one, source, limit_per_source) for source in sources]
+        for future in as_completed(futures):
+            result = future.result()
+            events.extend(result.pop("events"))
+            statuses.append(result)
+    # Keep the status strip in the original source order, not completion order.
+    order = {source.name: idx for idx, source in enumerate(sources)}
+    statuses.sort(key=lambda status: order.get(str(status["source"]), 999))
     return {"events": events, "statuses": statuses}
 
 
@@ -222,15 +258,18 @@ def throttle_host(url: str) -> None:
     interval = HOST_MIN_INTERVAL.get(host, DEFAULT_MIN_INTERVAL)
     if interval <= 0:
         return
+    # Reserve the next slot under the lock, but sleep outside it so one
+    # throttled host never blocks concurrent fetches of every other host.
     with _FETCH_LOCK:
         now = time.monotonic()
-        wait = interval - (now - _LAST_FETCH.get(host, 0.0))
-        if wait > 0:
-            time.sleep(wait)
-        _LAST_FETCH[host] = time.monotonic()
+        slot = max(now, _LAST_FETCH.get(host, 0.0) + interval)
+        _LAST_FETCH[host] = slot
+    wait = slot - now
+    if wait > 0:
+        time.sleep(wait)
 
 
-def fetch_text(url: str, timeout: int = 8) -> str:
+def fetch_text(url: str, timeout: int = 6) -> str:
     throttle_host(url)
     request = urllib.request.Request(
         url,
